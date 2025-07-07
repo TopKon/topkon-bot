@@ -229,3 +229,7 @@ async def fuel_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 async def cmd_endshift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Закрыть смену (заглушка, чтобы бот не падал). Добавьте логику позже."""
+    await update.message.reply_text(
+        "🔚 Завершение смены пока не реализовано. Используйте /начало и /топливо — эти команды работают.")
+    return ConversationHandler.END
