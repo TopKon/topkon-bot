@@ -220,7 +220,8 @@ async def fuel_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "",
         context.user_data["liters"],
         cost,
-        photo_    ])
+        photo_id,
+    ])
 
     total_today = update_daily_cost(today, chat_id)
     await update.message.reply_text(
@@ -228,104 +229,3 @@ async def fuel_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 async def cmd_endshift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not await ensure_registered(update, context):
-        return REG_NAME
-    await update.message.reply_text("🔚 Фото одометра в конце смены и пробег:")
-    return END_ODOMETER
-
-async def save_end_odo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    chat_id_int = update.effective_user.id
-    chat_id = str(chat_id_int)
-    msg = update.message
-
-    if chat_id_int not in sessions:
-        await msg.reply_text("Сначала выполните /начало")
-        return ConversationHandler.END
-
-    try:
-        odo_end = int(msg.text.strip())
-    except (ValueError, AttributeError):
-        await msg.reply_text("Нужно число. Попробуйте ещё раз:")
-        return END_ODOMETER
-
-    sess = sessions.pop(chat_id_int)
-    km = odo_end - sess["ОДО_Начала"]
-
-    LOG_SHEET.append_row([
-        sess["Дата"],
-        chat_id,
-        "Shift",
-        sess["Время_Начала"],
-        sess["ОДО_Начала"],
-        datetime.datetime.now(tz=MOSCOW_TZ).isoformat(timespec="seconds"),
-        odo_end,
-        km,
-        "",
-        "",
-        msg.photo[-1].file_id if msg.photo else "",
-    ])
-
-    await msg.reply_text(f"✅ Смена завершена. Пройдено {km} км")
-    return ConversationHandler.END
-
-# ---------------------- Напоминание в 19:00 --------------------------------------
-
-async def remind_unclosed(context: ContextTypes.DEFAULT_TYPE):
-    today = datetime.date.today(tz=MOSCOW_TZ).isoformat()
-    for chat_id_int, sess in list(sessions.items()):
-        if sess["Дата"] == today:
-            await context.bot.send_message(
-                chat_id_int,
-                "⏰ Напоминание: вы ещё не завершили смену. Пожалуйста отправьте /конец с фото одометра.")
-
-# ---------------------- Запуск приложения ----------------------------------------
-
-def main():
-    logging.basicConfig(level=logging.INFO)
-    application = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
-
-    # Планировщик напоминаний
-    application.job_queue.run_daily(
-        remind_unclosed,
-        time=datetime.time(hour=19, minute=0, tzinfo=MOSCOW_TZ),
-        name="daily_reminder",
-    )
-
-    # Регистрация
-    reg_conv = ConversationHandler(
-        entry_points=[],
-        states={
-            REG_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_name)],
-            REG_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_car)],
-        },
-        fallbacks=[],
-    )
-    application.add_handler(reg_conv)
-
-    # Основные команды
-    application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("начало", cmd_startshift)],
-        states={START_ODOMETER: [MessageHandler(filters.ALL, save_start_odo)]},
-        fallbacks=[],
-    ))
-    application.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("топливо", cmd_fuel)],
-        states={
-            FUEL_LITERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_liters)],
-            FUEL_COST: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_cost)],
-        },
-        fallbacks=[],
-    ))
-    application.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("конец", cmd_endshift)],
-        states={END_ODOMETER: [MessageHandler(filters.ALL, save_end_odo)]},
-        fallbacks=[],
-    ))
-
-    application.run_polling()
-
-
-if __name__ == "__main__":
-    main()
-
