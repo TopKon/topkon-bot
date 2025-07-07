@@ -2,4 +2,4 @@ python-telegram-bot==20.8
 gspread==6.0.2
 oauth2client==4.1.3
 Flask==2.3.3
-python==3.11.*
+text\npython-telegram-bot==20.8\ngspread==6.0.2\noauth2client==4.1.3\nFlask==2.3.3\n
