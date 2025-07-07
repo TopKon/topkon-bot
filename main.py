@@ -233,3 +233,15 @@ async def cmd_endshift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await update.message.reply_text(
         "🔚 Завершение смены пока не реализовано. Используйте /начало и /топливо — эти команды работают.")
     return ConversationHandler.END
+import threading
+import http.server
+import socketserver
+
+def fake_server():
+    PORT = 10000
+    Handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", PORT), Handler) as httpd:
+        httpd.serve_forever()
+
+threading.Thread(target=fake_server, daemon=True).start()
+
