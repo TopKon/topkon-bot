@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "fuelkon",
+  "private_key_id": "f5bb3ccca964409760b1ed3e5abd6f8f1932ae84",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCgwGNSZfq2TD1Q\nEMHEdsoKjelW+EMRNWsQklP8HKeMDSZXi6keGU0whc8P1ZPkFo7zK001wwvfKMV4\n3eYltTq6RiT3RKKZ4gFBGscnloUY81UG/kScjeeTU+woeuxbpES1/7qT88vvz9aj\ntMIQ+892EOTR/UUBadoqpmefZMHfMXP1AsjklMOT45TJ0U/r1uEaEgkeAmsKH+/e\nKNvdjHrfiBEWCt7PJmIt5oyYAG9nrw+m9xpAMuXQ9ur+u3MFE/bdIs4hvqQ/FZq3\nBt7aI0GpkIENBJl8nsBzV/fBKDtjFDu5Vli922ewuuFUpCur6ht9BUxVNReMAe1L\nO0+z1/xlAgMBAAECggEAHq5pppXxQq8NesUf/pv/lwEb+q36uwObkjejkPh1IB14\nZngxCJ4ipfK8IRUOG5gUo6Ptoie+kdLJ0fZkUWkkMt5les5eTIme3Kq8PTmU4Ly8\ny09nkAvjmbKIXfeMOjeBp80N8uQy1eww1uEOs0gkgi/aRJwW+hyWd9J376u+9xa/\nC1bVJrikT/cWMdJmJWwiE/BNIwbmXisCvGw4MWFxQv5pr76yToy1Lyt/UeVtWO46\nwyylULG/qa4aSzXtyUF+XqzhWtuCl7+LFGvOPQhO5lGNrlfCIaBbCvBWTUW8N3ep\nWuRcoYzbq0SBIDzjDuAX9/oFv68V6gpG1hwlHFHBdwKBgQDcZRzdV1ef6V9vgF09\n1+JG0vKUklcp9YnbQlq5nz9GYw5SozRM2MDrsHvWBSJ+U4KYwLnuNN9Zb8CQk3yQ\n5FHeDFNZMQP95aMGDTyipMuqa+yEQAFjly1LkCN6q/MS0cc9v9IFJdPpnoJJMsBU\nmvfWuIbEHOdtLXPVmrbBwpQ/3wKBgQC6uJjyh5BQE0Yest9NpeyR2CXj6lBI3cpx\n55TwXY+Nm2qtXc0qOaCLLGNN/oN0x+z8JVE6oS1+niUHeUVEz8dFtF4dcWbxzXTw\nFgG5yAWIjcQpAns+oJ2zZ8bLs3iay30CV9SVdJzpLYeN+eti0t6f1xZ/ltmPNVJ8\n0zKs5es8OwKBgDYu5ZnFD1XRGhVfiYzatlaTJfBAyg0WwH2XIpbf/75eO/c1CHac\nE1HeYZOMT56fCUxklVFqzj4+qyjgGY/Fkhr1DMiwtDqHajzipDWYLjoHrm4VDkJd\nuFULaq2N+IR37nPP5OI/Gook3gMA5yflsWiolPlB4eOFeSTalHOuUqQhAoGABtFg\nvFJY4aOihtJvNu2dEsI6t/TBU7fNgZU8Kf6wlDIdlhD7wdPy2cIYKivl7uix7Y8L\nRUHHYH0zyu8RqW6QzynD2f1fDes7ntye2YLFOPQ8Omcdyu6gc4GRj7SQ7c4KVYCR\ngZeNdzIzZeq/Po+Gk32OE8CVVxZSWb54djm6+isCgYB7GDoA+EXH5QoiCw95ltHn\ndWTA5xNUcJjwHBxz3MYXkD8NbjV7yEHaA+dD2Y7gxnBVonzOB9KX1tWq6HGCtfO4\nwctM11D9ignt3sB5WJlOUQoYO0zYTvO4zkCfmdDdv9MgeEx4o3FIUVu1NAI8UJvI\niSTmJMizduRg0NjbkwGbtg==\n-----END PRIVATE KEY-----\n",
+  "client_email": "topkon-bot@fuelkon.iam.gserviceaccount.com",
+  "client_id": "103508348906882248829",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/topkon-bot%40fuelkon.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
