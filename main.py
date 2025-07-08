@@ -1,26 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-Топкон‑бот v2.1 — исправлен конфликт event‑loop
+Топкон‑бот v2.2 — рабочая сборка без SyntaxError
 ────────────────────────────────────────────────────────────────────────────
-Изменения v2.1 ↴
-• убран вызов `asyncio.run()`  → `Application.run_polling()` запускается **синхронно** → нет ошибки «This event loop is already running».
-• остальная логика (регистрация, смена, заправка) без изменений.
+✔  исправлена незакрытая `states={ … }` (SyntaxError)
+✔  полностью реализован /endshift
+✔  единый `run_polling()` без asyncio.run → нет «event‑loop running»
+✔  все ConversationHandler‑ы корректно зарегистрированы
 
-Запуск: Flask‑заглушка + polling в основном потоке.
+Токен, ID таблицы и JSON‑ключ указываются через переменные окружения:
+  TOKEN, SPREADSHEET_ID, GOOGLE_APPLICATION_CREDENTIALS
 """
 
 import os, threading, datetime
 from zoneinfo import ZoneInfo
-from typing import Final
+from typing import Final, Optional
 
 from flask import Flask
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    ContextTypes,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
+    ContextTypes,
     filters,
 )
 
@@ -29,8 +31,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 from gspread.exceptions import WorksheetNotFound
 
 # ───────────────────────── Константы ─────────────────────────────────────
-TOKEN: Final[str] = "7718554572:AAElisVGS8qKak-la8mEKlKn7NACtD-kLVI"
-MOSCOW = ZoneInfo("Europe/Moscow")
+TOKEN: Final[str] = os.getenv("TOKEN", "")  # <-- ОБЯЗАТЕЛЬНО заменить в ENV
+TZ = ZoneInfo("Europe/Moscow")
 
 (
     REG_NAME,
@@ -44,87 +46,94 @@ MOSCOW = ZoneInfo("Europe/Moscow")
     END_PHOTO,
 ) = range(9)
 
-# ───────────────────────── Flask fake web (Render Free) ──────────────────
+# ───────────────────────── Flask‑заглушка (Render Free) ──────────────────
 
-def run_fake_web():
+def _fake_web():
     app = Flask(__name__)
 
-    @app.route("/")
-    def index():
+    @app.get("/")
+    def ping():
         return "Bot is alive!", 200
 
     app.run(host="0.0.0.0", port=8080)
 
-threading.Thread(target=run_fake_web, daemon=True).start()
+threading.Thread(target=_fake_web, daemon=True).start()
 
-# ───────────────────────── Google Sheets init ────────────────────────────
+# ───────────────────────── Google Sheets ─────────────────────────────────
 
-def init_sheets():
+def _init_sheets():
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(
         os.getenv("GOOGLE_APPLICATION_CREDENTIALS"), scope
     )
-    client = gspread.authorize(creds)
-    wb = client.open_by_key(os.getenv("SPREADSHEET_ID"))
+    gs = gspread.authorize(creds)
+    wb = gs.open_by_key(os.getenv("SPREADSHEET_ID"))
 
-    log_sheet = wb.sheet1
+    log = wb.sheet1
     header = [
         "Дата",
-        "ВодительID",
+        "UID",
         "ФИО",
         "Авто",
         "Тип",
         "Время",
         "ОДО",
-        "Фото_ID",
+        "Фото",
         "Литры",
         "Сумма",
         "Δ_км",
         "Личный_км",
     ]
-    if log_sheet.row_values(1) != header:
-        log_sheet.clear()
-        log_sheet.append_row(header)
+    if log.row_values(1) != header:
+        log.clear()
+        log.append_row(header)
 
     try:
-        drv_sheet = wb.worksheet("Drivers")
+        drv = wb.worksheet("Drivers")
     except WorksheetNotFound:
-        drv_sheet = wb.add_worksheet("Drivers", 1000, 3)
-        drv_sheet.append_row(["TelegramID", "ФИО", "Авто"])
-    return log_sheet, drv_sheet
+        drv = wb.add_worksheet("Drivers", 1000, 3)
+        drv.append_row(["UID", "ФИО", "Авто"])
+    return log, drv
+
+LOG_SHEET, DRV_SHEET = _init_sheets()
+DRIVERS = {r[0]: {"name": r[1], "car": r[2]} for r in DRV_SHEET.get_all_values()[1:]}
+
+# ───────────────────────── Helper ───────────────────────────────────────
+
+def _now():
+    return datetime.datetime.now(TZ).isoformat(timespec="seconds")
 
 
-LOG, DRIVERS = init_sheets()
-DRIVER_MAP = {row[0]: {"name": row[1], "car": row[2]} for row in DRIVERS.get_all_values()[1:]}
-
-# ───────────────────────── Helper functions ──────────────────────────────
-
-def last_odo(uid: str):
-    """Последний зафиксированный одометр (END или START)."""
-    for row in reversed(LOG.get_all_records()):
-        if row["ВодительID"] == uid and row["ОДО"]:
-            return int(row["ОДО"])
+def _last_odo(uid: str, entry_type: Optional[str] = None) -> Optional[int]:
+    """Последний ОДО по пользователю. Если entry_type передан — фильтруем."""
+    for row in reversed(LOG_SHEET.get_all_records()):
+        if row["UID"] != uid:
+            continue
+        if entry_type and row["Тип"] != entry_type:
+            continue
+        if row["ОДО"]:
+            try:
+                return int(row["ОДО"])
+            except ValueError:
+                return None
     return None
 
-
-async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _ensure_reg(update: Update) -> bool:
     uid = str(update.effective_user.id)
-    if uid in DRIVER_MAP:
+    if uid in DRIVERS:
         return True
     await update.message.reply_text("🚗 Вы не зарегистрированы. Введите ФИО:")
     return False
 
-# ───────────────────────── Команда /start ───────────────────────────────
+# ───────────────────────── /start ───────────────────────────────────────
 
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
-    if uid not in DRIVER_MAP:
-        await update.message.reply_text(
-            "👋 Добро пожаловать в Топкон‑бот! Давайте зарегистрируемся. Введите ФИО:"
-        )
+    if uid not in DRIVERS:
+        await update.message.reply_text("👋 Добро пожаловать! Введите ФИО для регистрации:")
         return REG_NAME
     await update.message.reply_text(
-        "⚙️ Команды:\n/startshift – начало смены\n/fuel – заправка\n/endshift – конец смены"
+        "⚙️ Доступные команды:\n/startshift – начало смены\n/fuel – заправка\n/endshift – конец смены"
     )
     return ConversationHandler.END
 
@@ -132,7 +141,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def reg_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name_tmp"] = update.message.text.strip()
-    await update.message.reply_text("Введите номер автомобиля:")
+    await update.message.reply_text("Введите номер авто:")
     return REG_CAR
 
 
@@ -141,69 +150,61 @@ async def reg_car(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = context.user_data.pop("name_tmp")
     car = update.message.text.strip()
 
-    DRIVERS.append_row([uid, name, car])
-    DRIVER_MAP[uid] = {"name": name, "car": car}
+    DRV_SHEET.append_row([uid, name, car])
+    DRIVERS[uid] = {"name": name, "car": car}
 
-    await update.message.reply_text(
-        f"✅ Регистрация завершена, {name}. Используйте /startshift"
-    )
+    await update.message.reply_text("✅ Регистрация завершена. Используйте /startshift")
     return ConversationHandler.END
 
 registration_conv = ConversationHandler(
     entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, reg_name)],
     states={REG_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_car)]},
     fallbacks=[],
-    map_to_parent={ConversationHandler.END: ConversationHandler.END},
 )
 
-# ───────────────────────── Начало смены ──────────────────────────────────
+# ───────────────────────── Начало смены ─────────────────────────────────
 
 async def startshift_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ensure_registered(update, context):
+    if not await _ensure_reg(update):
         return ConversationHandler.END
-    await update.message.reply_text("Введите пробег на начало смены (число):")
+    await update.message.reply_text("Введите одометр (км) на начало смены:")
     return START_ODO
 
 
 async def startshift_odo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        odo = int(update.message.text.replace(",", "."))
+        odo_val = int(update.message.text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("Нужно число. Повторите:")
+        await update.message.reply_text("Нужно число. Повторите одометр:")
         return START_ODO
-    context.user_data["start_odo"] = odo
+    context.user_data["start_odo"] = odo_val
     await update.message.reply_text("Пришлите фото одометра:")
     return START_PHOTO
 
 
 async def startshift_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo_id = update.message.photo[-1].file_id if update.message.photo else ""
-
     uid = str(update.effective_user.id)
-    name = DRIVER_MAP[uid]["name"]
-    car = DRIVER_MAP[uid]["car"]
+    name, car = DRIVERS[uid]["name"], DRIVERS[uid]["car"]
     odo_start = context.user_data.pop("start_odo")
-    today = datetime.date.today(MOSCOW).isoformat()
 
-    personal_km = odo_start - (last_odo(uid) or odo_start)
+    personal = odo_start - (_last_odo(uid) or odo_start)
 
-    LOG.append_row([
-        today,
+    LOG_SHEET.append_row([
+        datetime.date.today(TZ).isoformat(),
         uid,
         name,
         car,
         "Start",
-        datetime.datetime.now(MOSCOW).isoformat(timespec="seconds"),
+        _now(),
         odo_start,
         photo_id,
         "",
         "",
         "",
-        personal_km,
+        personal,
     ])
-    await update.message.reply_text(
-        "✅ Смена начата. Команды:\n/fuel – заправка\n/endshift – конец смены"
-    )
+    await update.message.reply_text("✅ Смена начата. /fuel или /endshift")
     return ConversationHandler.END
 
 startshift_conv = ConversationHandler(
@@ -215,10 +216,10 @@ startshift_conv = ConversationHandler(
     fallbacks=[],
 )
 
-# ───────────────────────── Заправка ──────────────────────────────────────
+# ───────────────────────── Заправка ─────────────────────────────────────
 
 async def fuel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ensure_registered(update, context):
+    if not await _ensure_reg(update):
         return ConversationHandler.END
     await update.message.reply_text("Пришлите фото чека:")
     return FUEL_PHOTO
@@ -226,7 +227,7 @@ async def fuel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def fuel_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fuel_photo"] = update.message.photo[-1].file_id
-    await update.message.reply_text("Введите сумму чека (₽):")
+    await update.message.reply_text("Введите сумму (₽):")
     return FUEL_COST
 
 
@@ -237,7 +238,7 @@ async def fuel_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Нужно число. Повторите сумму:")
         return FUEL_COST
     context.user_data["fuel_cost"] = cost
-    await update.message.reply_text("Введите количество литров:")
+    await update.message.reply_text("Введите литры:")
     return FUEL_LITERS
 
 
@@ -249,17 +250,14 @@ async def fuel_liters(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return FUEL_LITERS
 
     uid = str(update.effective_user.id)
-    name = DRIVER_MAP[uid]["name"]
-    car = DRIVER_MAP[uid]["car"]
-    today = datetime.date.today(MOSCOW).isoformat()
-
-    LOG.append_row([
-        today,
+    name, car = DRIVERS[uid]["name"], DRIVERS[uid]["car"]
+    LOG_SHEET.append_row([
+        datetime.date.today(TZ).isoformat(),
         uid,
         name,
         car,
         "Fuel",
-        datetime.datetime.now(MOSCOW).isoformat(timespec="seconds"),
+        _now(),
         "",
         context.user_data.pop("fuel_photo"),
         liters,
@@ -275,7 +273,88 @@ fuel_conv = ConversationHandler(
     states={
         FUEL_PHOTO: [MessageHandler(filters.PHOTO, fuel_photo)],
         FUEL_COST: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_cost)],
-        FUEL_LITERS
+        FUEL_LITERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_liters)],
+    },
+    fallbacks=[],
+)
+
+# ───────────────────────── Конец смены ─────────────────────────────────--
+
+async def endshift_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _ensure_reg(update):
+        return ConversationHandler.END
+    await update.message.reply_text("Введите одометр на конец смены:")
+    return END_ODO
+
+
+async def endshift_odo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        odo_val = int(update.message.text.replace(",", "."))
+    except ValueError:
+        await update.message.reply_text("Нужно число. Повторите одометр:")
+        return END_ODO
+    context.user_data["end_odo"] = odo_val
+    await update.message.reply_text("Пришлите фото одометра:")
+    return END_PHOTO
+
+
+async def endshift_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo_id = update.message.photo[-1].file_id if update.message.photo else ""
+    uid = str(update.effective_user.id)
+    name, car = DRIVERS[uid]["name"], DRIVERS[uid]["car"]
+    odo_end = context.user_data.pop("end_odo")
+
+    last_start = _last_odo(uid, entry_type="Start") or odo_end
+    delta = odo_end - last_start
+
+    LOG_SHEET.append_row([
+        datetime.date.today(TZ).isoformat(),
+        uid,
+        name,
+        car,
+        "End",
+        _now(),
+        odo_end,
+        photo_id,
+        "",
+        "",
+        delta,
+        "",
+    ])
+    await update.message.reply_text("✅ Смена завершена. Хорошего отдыха! /startshift — новая смена")
+    return ConversationHandler.END
+
+endshift_conv = ConversationHandler(
+    entry_points=[CommandHandler("endshift", endshift_cmd)],
+    states={
+        END_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, endshift_odo)],
+        END_PHOTO: [MessageHandler(filters.PHOTO, endshift_photo)],
+    },
+    fallbacks=[],
+)
+
+# ───────────────────────── Main ─────────────────────────────────────────
+
+def main():
+    if not TOKEN:
+        raise RuntimeError("TOKEN env var not set")
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    # Handlers
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(registration_conv)
+    app.add_handler(startshift_conv)
+    app.add_handler(fuel_conv)
+    app.add_handler(endshift_conv)
+
+    print("🔄 Bot polling started", flush=True)
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
+
 
 
 
