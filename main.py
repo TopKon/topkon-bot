@@ -7,7 +7,7 @@
 Переменные окружения:
   TOKEN — токен бота
   SPREADSHEET_ID — ID Google‑таблицы
-  GOOGLE_APPLICATION_CREDENTIALS — имя json‑ключа GCP
+  GOOGLE_APPLICATION_CREDENTIALS — имя json‑файла с ключом GCP
 
 Команды:
   /start — регистрация и справка
@@ -64,7 +64,8 @@ _HEADER = [
 ]
 _COL_ID = {h: i for i, h in enumerate(_HEADER)}
 
-# Flask-заглушка
+# Flask-заглушка для Render Free
+
 def _fake_web():
     app = Flask(__name__)
     @app.get("/")
@@ -73,6 +74,7 @@ def _fake_web():
 threading.Thread(target=_fake_web, daemon=True).start()
 
 # Google Sheets
+
 def _init_sheets():
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(
@@ -95,10 +97,13 @@ LOG_WS, DRV_WS = _init_sheets()
 DRIVERS = {r[0]: {"name": r[1], "car": r[2]} for r in DRV_WS.get_all_values()[1:]}
 
 # вспомогательные
-def _now(): return datetime.datetime.now(TZ)
+
+def _now():
+    return datetime.datetime.now(TZ)
 
 def _append(uid: str, type_: str, **fields):
-    if uid not in DRIVERS: return
+    if uid not in DRIVERS:
+        return
     row = [""] * len(_HEADER)
     row[_COL_ID["Дата"]] = _now().date().isoformat()
     row[_COL_ID["UID"]] = uid
@@ -106,85 +111,105 @@ def _append(uid: str, type_: str, **fields):
     row[_COL_ID["Авто"]] = DRIVERS[uid]["car"]
     row[_COL_ID["Тип"]] = type_
     row[_COL_ID["Время"]] = _now().isoformat(timespec="seconds")
-    for k,v in fields.items():
-        if k in _COL_ID: row[_COL_ID[k]] = v
+    for k, v in fields.items():
+        if k in _COL_ID:
+            row[_COL_ID[k]] = v
     LOG_WS.append_row(row)
 
-async def _need_reg(update: Update):
+async def _need_reg(update: Update) -> bool:
     uid = str(update.effective_user.id)
     if uid not in DRIVERS:
         await update.message.reply_text("🚗 Сначала /start для регистрации.")
         return True
     return False
 
+# получение последней записи по типу
+
+def _get_last_record(uid: str, type_: str) -> tuple[datetime.datetime,int]:
+    for rec in reversed(LOG_WS.get_all_records()):
+        if rec['UID']==uid and rec['Тип']==type_:
+            try:
+                t = datetime.datetime.fromisoformat(rec['Время'])
+                odo = int(rec['ОДО'])
+                return t, odo
+            except:
+                continue
+    # если нет, возвращаем текущее
+    return _now(), 0
+
 # ========== регистрация ==========
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if uid in DRIVERS:
         await update.message.reply_text(
-            "⚙️ Доступные: /startshift /fuel /endshift /changecar /help"
+            "⚙️ Уже зарегистрированы. Доступные: /startshift /fuel /endshift /changecar /help"
         )
         return ConversationHandler.END
     await update.message.reply_text("👤 Введите ФИО:")
     return REG_NAME
 
 async def reg_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['name']=update.message.text.strip()
+    ctx.user_data['name'] = update.message.text.strip()
     await update.message.reply_text("🚘 Введите номер авто:")
     return REG_CAR
 
 async def reg_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid=str(update.effective_user.id)
-    name=ctx.user_data.pop('name')
-    car=update.message.text.strip()
-    DRV_WS.append_row([uid,name,car])
-    DRIVERS[uid]={'name':name,'car':car}
-    await update.message.reply_text(f"✅ {name}, регистрация завершена! Доступно: /startshift /fuel /endshift /changecar /help")
+    uid = str(update.effective_user.id)
+    name = ctx.user_data.pop('name')
+    car = update.message.text.strip()
+    DRV_WS.append_row([uid, name, car])
+    DRIVERS[uid] = {'name': name, 'car': car}
+    await update.message.reply_text(
+        f"✅ {name}, регистрация завершена! Доступно: /startshift /fuel /endshift /changecar /help"
+    )
     return ConversationHandler.END
 
-reg_conv=ConversationHandler(
-    entry_points=[CommandHandler('start',cmd_start)],
+reg_conv = ConversationHandler(
+    entry_points=[CommandHandler('start', cmd_start)],
     states={
-        REG_NAME:[MessageHandler(filters.TEXT&~filters.COMMAND,reg_name)],
-        REG_CAR: [MessageHandler(filters.TEXT&~filters.COMMAND,reg_car)],
+        REG_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_name)],
+        REG_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_car)],
     },
     fallbacks=[]
 )
 
 # ========== смена авто ==========
+
 async def cmd_changecar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
-    uid=str(update.effective_user.id)
+    uid = str(update.effective_user.id)
     await update.message.reply_text(f"{DRIVERS[uid]['name']}, введите новый номер авто:")
     return CHANGE_CAR
 
 async def change_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid=str(update.effective_user.id)
-    new=update.message.text.strip()
-    col=DRV_WS.col_values(1)
-    row=col.index(uid)+1
-    DRV_WS.update_cell(row,3,new)
-    DRIVERS[uid]['car']=new
+    uid = str(update.effective_user.id)
+    new = update.message.text.strip()
+    col = DRV_WS.col_values(1)
+    row = col.index(uid) + 1
+    DRV_WS.update_cell(row, 3, new)
+    DRIVERS[uid]['car'] = new
     await update.message.reply_text(f"✅ Номер авто обновлен: {new}")
     return ConversationHandler.END
 
-change_conv=ConversationHandler(
-    entry_points=[CommandHandler('changecar',cmd_changecar)],
-    states={ CHANGE_CAR:[MessageHandler(filters.TEXT&~filters.COMMAND,change_car)] },
+change_conv = ConversationHandler(
+    entry_points=[CommandHandler('changecar', cmd_changecar)],
+    states={CHANGE_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, change_car)]},
     fallbacks=[]
 )
 
 # ========== начало смены ==========
+
 async def cmd_startshift(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
-    uid=str(update.effective_user.id)
-    name=DRIVERS[uid]['name']
-    await update.message.reply_text(f"{name}, укажите пробег на начало смены:")
+    uid = str(update.effective_user.id)
+    name = DRIVERS[uid]['name']
+    await update.message.reply_text(f"{name}, укажите пробег на начало смены (км):")
     return START_ODO
 
 async def start_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        ctx.user_data['odo_start']=int(update.message.text)
+        ctx.user_data['odo_start'] = int(update.message.text)
     except:
         await update.message.reply_text("Нужно число, попробуйте ещё:")
         return START_ODO
@@ -195,51 +220,45 @@ async def start_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Нужно фото, пришлите снова:")
         return START_PHOTO
-    uid=str(update.effective_user.id)
-    odo=ctx.user_data.pop('odo_start')
-    prev=_get_last('End',uid) or odo
-    personal=odo-prev
-    _append(uid,'Start',ОДО=odo,Фото=update.message.photo[-1].file_id,Личный_км=personal)
+    uid = str(update.effective_user.id)
+    odo = ctx.user_data.pop('odo_start')
+    _, prev_odo = _get_last_record(uid, 'End')
+    personal = odo - prev_odo
+    _append(uid, 'Start', ОДО=odo, Фото=update.message.photo[-1].file_id, Личный_км=personal)
     await update.message.reply_text(
-        "✅ Смена начата. Доступно: /fuel – заправка | /endshift – завершить"
+        "✅ Смена начата. Доступно: /fuel — заправка | /endshift — завершить"
     )
     return ConversationHandler.END
 
-start_conv=ConversationHandler(
-    entry_points=[CommandHandler('startshift',cmd_startshift)],
+start_conv = ConversationHandler(
+    entry_points=[CommandHandler('startshift', cmd_startshift)],
     states={
-        START_ODO:[MessageHandler(filters.TEXT&~filters.COMMAND,start_odo)],
-        START_PHOTO:[MessageHandler(filters.PHOTO,start_photo)]
+        START_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_odo)],
+        START_PHOTO: [MessageHandler(filters.PHOTO, start_photo)],
     },
     fallbacks=[]
 )
 
-# вспомогательный для прошлого одометра
-
-def _get_last(type_,uid):
-    for rec in reversed(LOG_WS.get_all_records()):
-        if rec['UID']==uid and rec['Тип']==type_:
-            try: return int(rec['ОДО'])
-            except: pass
-    return None
-
 # ========== заправка ==========
+
 async def cmd_fuel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
-    uid=str(update.effective_user.id)
-    await update.message.reply_text(f"{DRIVERS[uid]['name']}, пришлите фото чека:")
+    uid = str(update.effective_user.id)
+    name = DRIVERS[uid]['name']
+    await update.message.reply_text(f"{name}, пришлите фото чека:")
     return FUEL_PHOTO
 
 async def fuel_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Нужно фото чека, пришлите:")
         return FUEL_PHOTO
-    ctx.user_data['fuel_photo']=update.message.photo[-1].file_id
+    ctx.user_data['fuel_photo'] = update.message.photo[-1].file_id
     await update.message.reply_text("Введите сумму (₽):")
     return FUEL_COST
 
 async def fuel_cost(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try: ctx.user_data['fuel_cost']=float(update.message.text)
+    try:
+        ctx.user_data['fuel_cost'] = float(update.message.text)
     except:
         await update.message.reply_text("Нужно число, повторите сумму:")
         return FUEL_COST
@@ -247,35 +266,38 @@ async def fuel_cost(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return FUEL_LITERS
 
 async def fuel_liters(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try: liters=float(update.message.text)
+    try:
+        liters = float(update.message.text)
     except:
         await update.message.reply_text("Нужно число, повторите литры:")
         return FUEL_LITERS
-    uid=str(update.effective_user.id)
-    _append(uid,'Fuel',Фото=ctx.user_data.pop('fuel_photo'),Сумма=ctx.user_data.pop('fuel_cost'),Литры=liters)
-    await update.message.reply_text("✅ Заправка сохранена.")
+    uid = str(update.effective_user.id)
+    _append(uid, 'Fuel', Фото=ctx.user_data.pop('fuel_photo'), Сумма=ctx.user_data.pop('fuel_cost'), Литры=liters)
+    await update.message.reply_text("✅ Заправка сохранена. Доступно: /fuel /endshift /help")
     return ConversationHandler.END
 
-fuel_conv=ConversationHandler(
-    entry_points=[CommandHandler('fuel',cmd_fuel)],
+fuel_conv = ConversationHandler(
+    entry_points=[CommandHandler('fuel', cmd_fuel)],
     states={
-        FUEL_PHOTO:[MessageHandler(filters.PHOTO,fuel_photo)],
-        FUEL_COST:[MessageHandler(filters.TEXT&~filters.COMMAND,fuel_cost)],
-        FUEL_LITERS:[MessageHandler(filters.TEXT&~filters.COMMAND,fuel_liters)]
+        FUEL_PHOTO: [MessageHandler(filters.PHOTO, fuel_photo)],
+        FUEL_COST: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_cost)],
+        FUEL_LITERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_liters)],
     },
     fallbacks=[]
 )
 
 # ========== конец смены ==========
+
 async def cmd_endshift(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
-    uid=str(update.effective_user.id)
-    name=DRIVERS[uid]['name']
-    await update.message.reply_text(f"{name}, укажите пробег на конец смены:")
+    uid = str(update.effective_user.id)
+    name = DRIVERS[uid]['name']
+    await update.message.reply_text(f"{name}, укажите пробег на конец смены (км):")
     return END_ODO
 
 async def end_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try: ctx.user_data['odo_end']=int(update.message.text)
+    try:
+        ctx.user_data['odo_end'] = int(update.message.text)
     except:
         await update.message.reply_text("Нужно число, попробуйте ещё:")
         return END_ODO
@@ -286,11 +308,51 @@ async def end_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Нужно фото, пришлите:")
         return END_PHOTO
-    uid=str(update.effective_user.id)
-    odo_end=ctx.user_data.pop('odo_end')
-    start_time, start_odo = _get_last_record(uid,'Start')
-    delta=odo_end-start_odo
-    _append(uid,'End',ОДО=odo_end,Фото=update.message.photo[-
+    uid = str(update.effective_user.id)
+    odo_end = ctx.user_data.pop('odo_end')
+    start_time, start_odo = _get_last_record(uid, 'Start')
+    delta_km = odo_end - start_odo
+    work_hours = round((datetime.datetime.now(TZ) - start_time).total_seconds() / 3600, 2)
+    _append(uid, 'End', ОДО=odo_end, Фото=update.message.photo[-1].file_id, Δ_км=delta_km)
+    name = DRIVERS[uid]['name']
+    await update.message.reply_text(
+        f"✅ Смена завершена. {name}, вы проехали {delta_km} км и работали {work_hours} ч. Приятного отдыха! Доступно: /startshift /help"
+    )
+    return ConversationHandler.END
+
+end_conv = ConversationHandler(
+    entry_points=[CommandHandler('endshift', cmd_endshift)],
+    states={
+        END_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, end_odo)],
+        END_PHOTO: [MessageHandler(filters.PHOTO, end_photo)],
+    },
+    fallbacks=[]
+)
+
+# ========== помощь ==========
+
+async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "⚙️ Доступные команды: /start /startshift /fuel /endshift /changecar /help"
+    )
+
+# ========== основной запуск ==========
+
+def main():
+    if not TOKEN:
+        raise RuntimeError("TOKEN env var not set")
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(reg_conv)
+    app.add_handler(change_conv)
+    app.add_handler(start_conv)
+    app.add_handler(fuel_conv)
+    app.add_handler(end_conv)
+    app.add_handler(CommandHandler('help', help_cmd))
+    print("🔄 Bot polling started", flush=True)
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
 
 
 
