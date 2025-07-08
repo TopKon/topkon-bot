@@ -73,6 +73,7 @@ HEADER = [
 IDX = {h: i for i, h in enumerate(HEADER)}
 
 # Flask stub for Render
+
 def _fake_web():
     app = Flask(__name__)
     @app.get('/')
@@ -116,7 +117,7 @@ def now_iso() -> str:
     return datetime.datetime.now(TZ).isoformat(timespec='seconds')
 
 def append_log(uid: str, **fields) -> None:
-    row = [""] * len(HEADER)
+    row = [''] * len(HEADER)
     row[IDX['Дата']] = datetime.date.today(TZ).isoformat()
     row[IDX['UID']] = uid
     info = USERS.get(uid, {})
@@ -127,7 +128,7 @@ def append_log(uid: str, **fields) -> None:
     row[IDX['Тип']] = fields.get('Тип', '')
     row[IDX['Время']] = now_iso()
     for k, v in fields.items():
-        if k in IDX:
+        if k in IDX and k not in ('Тип','Время'):
             row[IDX[k]] = str(v)
     LOG_WS.append_row(row)
 
@@ -137,7 +138,7 @@ def last_odo(uid: str, only_type: Optional[str] = None) -> int:
             try:
                 return int(rec.get('ОДО', 0))
             except:
-                pass
+                return 0
     return 0
 
 def menu_keyboard(uid: str) -> ReplyKeyboardMarkup:
@@ -183,7 +184,7 @@ async def role_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def reg_company(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     company = update.message.text.strip()
-    role = ctx.user_data['role']
+    role = ctx.user_data.get('role')
     if role == 'Руководитель':
         USERS[uid] = {'role': role, 'company': company, 'car': '', 'name': ''}
         USR_WS.append_row([uid,role,company,'',''])
@@ -206,9 +207,9 @@ async def reg_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     car = update.message.text.strip()
     USERS[uid] = {
         'role': 'Водитель',
-        'company': ctx.user_data['company'],
+        'company': ctx.user_data.get('company',''),
         'car': car,
-        'name': ctx.user_data['name']
+        'name': ctx.user_data.get('name','')
     }
     USR_WS.append_row([uid,'Водитель',ctx.user_data['company'],car,ctx.user_data['name']])
     await update.message.reply_text(
@@ -276,111 +277,8 @@ async def fuel_liters(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Нужно число. Введите литры:")
         return FUEL_LITERS
     append_log(
-        uid, Тип='Fuel', Фото=ctx.user_data.pop('фото'), Сумма=ctx.user_data.pop('сумма'), Литры=l
-    )
-    await update.message.reply_text(
-        "✅ Заправка сохранена.", reply_markup=menu_keyboard(uid)
-    )
-    return ConversationHandler.END
 
-async def endshift_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await ensure_reg(update): return ConversationHandler.END
-    uid = str(update.effective_user.id)
-    await update.message.reply_text(
-        "Укажите пробег на конец смены (км):",
-        reply_markup=menu_keyboard(uid)
-    )
-    return END_ODO
 
-async def end_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    try:
-        v = int(update.message.text.replace(',', '.'))
-    except:
-        await update.message.reply_text("Нужно число. Попробуйте снова:")
-        return END_ODO
-    prev = last_odo(uid, 'Start')
-    delta = v - prev
-    # calculate hours worked
-    recs = LOG_WS.get_all_records()
-    start_time = None
-    for rec in reversed(recs):
-        if str(rec.get('UID')) == uid and rec.get('Тип') == 'Start':
-            start_time = datetime.datetime.fromisoformat(rec.get('Время'))
-            break
-    now = datetime.datetime.now(TZ)
-    hours = round((now - start_time).total_seconds()/3600, 2) if start_time else 0
-    append_log(uid, Тип='End', ОДО=v, Δ_км=delta)
-    await update.message.reply_text(
-        f"✅ Смена завершена. Вы проехали {delta} км и работали {hours} часов. Приятного отдыха!",
-        reply_markup=menu_keyboard(uid)
-    )
-    return ConversationHandler.END
-
-async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    await update.message.reply_text(
-        "⚙️ Доступные команды: /start, /startshift, /fuel, /endshift, /help",
-        reply_markup=menu_keyboard(uid)
-    )
-
-async def unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    await update.message.reply_text(
-        "Извините, я не понял. Пожалуйста, выберите команду из меню.",
-        reply_markup=menu_keyboard(uid)
-    )
-
-# Conversation handlers
-def main():
-    if not TOKEN:
-        raise RuntimeError("TOKEN env var not set")
-    app = ApplicationBuilder().token(TOKEN).build()
-    # registration
-    reg_conv = ConversationHandler(
-        entry_points=[CommandHandler('start', cmd_start)],
-        states={
-            ROLE_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, role_select)],
-            REG_COMPANY: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_company)],
-            REG_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_name)],
-            REG_CAR: [MessageHandler(filters.TEXT & ~filters.C                                                                                ]
-        },
-        fallbacks=[CommandHandler('start', cmd_start)],
-    )
-    app.add_handler(reg_conv)
-    # start shift
-    start_conv = ConversationHandler(
-        entry_points=[CommandHandler('startshift', startshift_cmd)],
-        states={START_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_odo)]},
-        fallbacks=[CommandHandler('help', help_cmd)],
-    )
-    app.add_handler(start_conv)
-    # fuel
-    fuel_conv = ConversationHandler(
-        entry_points=[CommandHandler('fuel', fuel_cmd)],
-        states={
-            FUEL_PHOTO: [MessageHandler(filters.PHOTO, fuel_photo)],
-            FUEL_COST: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_cost)],
-            FUEL_LITERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_liters)],
-        },
-        fallbacks=[CommandHandler('help', help_cmd)],
-    )
-    app.add_handler(fuel_conv)
-    # end shift
-    end_conv = ConversationHandler(
-        entry_points=[CommandHandler('endshift', endshift_cmd)],
-        states={END_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, end_odo)]},
-        fallbacks=[CommandHandler('help', help_cmd)],
-    )
-    app.add_handler(end_conv)
-    # help and unknown
-    app.add_handler(CommandHandler('help', help_cmd))
-    app.add_handler(MessageHandler(filters.ALL, unknown))
-    print("🔄 Bot polling started", flush=True)
-    app.run_polling()
-
-if __name__ == '__main__':
-    main()
 
 
 
