@@ -50,7 +50,7 @@ TOKEN = os.getenv("TOKEN", "")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "")
 GOOGLE_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
 TZ = ZoneInfo("Europe/Moscow")
-ADMIN_UID = os.getenv('ADMIN_UID', '1881053841')
+ADMIN_UID = '1881053841'  # default admin UID
 
 # States
 (
@@ -381,6 +381,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
