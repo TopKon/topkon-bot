@@ -1,23 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-Топкон‑бот v1.2 — исправленная рабочая версия
+Топкон‑бот v1.3 — реагирует на /start
 ────────────────────────────────────────────────────────────────────────────
-• Однократная регистрация (ФИО + авто)
-• Смена: старт → (опц.) заправка → конец
-• Подсчёт «личного» пробега (ODO start − последний End)
-• Хранение в Google Sheets
-• Flask‑заглушка (порт 8080) — Render Free считает сервис «живым»
-• Чистый polling‑режим (без Webhook) — максимально просто
-• Исправлены все незакрытые скобки и Conversation states
+• /start — выводит краткую справку и запуск регистрации при первом входе
+• Остальной функционал v1.2 сохранён
 """
 
-import os, threading, datetime
+import os, threading, datetime, asyncio
 from collections import defaultdict
 from zoneinfo import ZoneInfo
 
 # ───────────────────────── Flask (порт 8080) ───────────────────────────────
 from flask import Flask
-
 
 def run_fake_web():
     app = Flask(__name__)
@@ -27,7 +21,6 @@ def run_fake_web():
         return "Bot is alive!", 200
 
     app.run(host="0.0.0.0", port=8080)
-
 
 threading.Thread(target=run_fake_web, daemon=True).start()
 
@@ -48,7 +41,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from gspread.exceptions import WorksheetNotFound
 
 # ───────────────────────── Константы ───────────────────────────────────────
-TOKEN = "7718554572:AAElisVGS8qKak-la8mEKlKn7NACtD-kLVI"  # токен клиента
+TOKEN = "7718554572:AAElisVGS8qKak-la8mEKlKn7NACtD-kLVI"
 MOSCOW = ZoneInfo("Europe/Moscow")
 
 # Conversation states
@@ -107,7 +100,6 @@ DRIVER_MAP = {row[0]: {"name": row[1], "car": row[2]} for row in DRIVERS.get_all
 # ───────────────────────── Вспомогательные ────────────────────────────────
 
 def last_odo(uid: str):
-    """Вернёт последний одометр из журнала."""
     for row in reversed(LOG.get_all_records()):
         if row["ВодительID"] == uid and row["ОДО"]:
             return int(row["ОДО"])
@@ -121,6 +113,20 @@ async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🚗 Вы не зарегистрированы. Введите ФИО:")
     return False
 
+# ───────────────────────── /start ─────────────────────────────────────────
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Приветствие и проверка регистрации."""
+    uid = str(update.effective_user.id)
+    if uid not in DRIVER_MAP:
+        await update.message.reply_text(
+            "👋 Добро пожаловать в Топкон‑бот! Давайте зарегистрируемся. Введите ФИО:"
+        )
+        return REG_NAME
+    await update.message.reply_text(
+        "⚙️ Команды:\n/startshift – начало смены\n/fuel – заправка\n/endshift – конец смены"
+    )
+    return ConversationHandler.END
 
 # ───────────────────────── Регистрация ─────────────────────────────────────
 
@@ -142,7 +148,6 @@ async def reg_car(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Регистрация завершена, {name}. Используйте /startshift"
     )
     return ConversationHandler.END
-
 
 # ───────────────────────── Старт смены ─────────────────────────────────────
 
@@ -193,7 +198,6 @@ async def startshift_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Смена начата. Команды:\n/fuel – заправка\n/endshift – конец смены"
     )
     return ConversationHandler.END
-
 
 # ───────────────────────── Заправка ────────────────────────────────────────
 
@@ -250,7 +254,6 @@ async def fuel_liters(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Заправка сохранена.")
     return ConversationHandler.END
 
-
 # ───────────────────────── Конец смены ─────────────────────────────────────
 
 async def endshift_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,12 +275,8 @@ async def endshift_odo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def endshift_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo_id = update.message.photo[-1].file_id if update.message.photo else ""
+    photo_id = update
 
-    uid = str(update.effective_user.id)
-    name = DRIVER_MAP[uid]["name"]
-    car = DRIVER_MAP[uid]["car"]
-    odo_end = context.user
 
 
 
