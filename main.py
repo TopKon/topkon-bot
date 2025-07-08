@@ -1,4 +1,4 @@
-# main.py - Topkon Bot Complete - Fixed and Fully Functional
+# main.py - Topkon Bot Complete
 """
 Коробочное решение: один файл main.py
 Функционал:
@@ -30,7 +30,7 @@ try:
     import telegram
 except ModuleNotFoundError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", *REQUIRE])
-    import telegram
+    import telegram  # noqa: E402
 
 from flask import Flask
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -67,7 +67,7 @@ TZ = ZoneInfo("Europe/Moscow")
     END_PHOTO,
 ) = range(11)
 
-# Log header
+# Header for log sheet
 HEADER = [
     "Дата", "UID", "Роль", "Компания", "ФИО", "Авто",
     "Тип", "Время", "ОДО", "Фото", "Сумма", "Литры", "Δ_км", "Личный_км"
@@ -82,6 +82,7 @@ def _fake_web():
     def ping():
         return "OK", 200
     app.run(host='0.0.0.0', port=8080)
+
 threading.Thread(target=_fake_web, daemon=True).start()
 
 # Initialize Google Sheets
@@ -105,7 +106,8 @@ def init_sheets():
     return log_ws, usr_ws
 
 LOG_WS, USR_WS = init_sheets()
-# Load users
+
+# Load users dict from sheet
 USERS: Dict[str, Dict] = {}
 for row in USR_WS.get_all_values()[1:]:
     if len(row) < 5 or not row[0].isdigit():
@@ -114,10 +116,11 @@ for row in USR_WS.get_all_values()[1:]:
     USERS[uid] = {"role": role, "company": company, "car": car, "name": name}
 
 # Helpers
-def now_iso():
+
+def now_iso() -> str:
     return datetime.datetime.now(TZ).isoformat(timespec='seconds')
 
-def append_log(uid: str, **fields):
+def append_log(uid: str, **fields) -> None:
     row = [""] * len(HEADER)
     row[IDX['Дата']] = datetime.date.today(TZ).isoformat()
     row[IDX['UID']] = uid
@@ -126,11 +129,13 @@ def append_log(uid: str, **fields):
     row[IDX['Компания']] = info.get('company', '')
     row[IDX['ФИО']] = info.get('name', '')
     row[IDX['Авто']] = info.get('car', '')
-    # Type, Time filled via fields
+    row[IDX['Тип']] = fields.get('Тип', '')
+    row[IDX['Время']] = now_iso()
     for k, v in fields.items():
         if k in IDX:
             row[IDX[k]] = str(v)
     LOG_WS.append_row(row)
+
 
 def last_odo(uid: str, only_type: Optional[str] = None) -> int:
     for rec in reversed(LOG_WS.get_all_records()):
@@ -141,7 +146,8 @@ def last_odo(uid: str, only_type: Optional[str] = None) -> int:
                 pass
     return 0
 
-def menu_keyboard(uid: Optional[str] = None):
+
+def menu_keyboard(uid: str) -> ReplyKeyboardMarkup:
     role = USERS.get(uid, {}).get('role')
     base = ['/startshift', '/fuel', '/endshift', '/help']
     if role == 'Admin':
@@ -152,12 +158,11 @@ async def ensure_reg(update: Update) -> bool:
     uid = str(update.effective_user.id)
     if uid in USERS:
         return True
-    await update.message.reply_text(
-        "Пожалуйста, зарегистрируйтесь: /start"
-    )
+    await update.message.reply_text("Пожалуйста, зарегистрируйтесь: /start")
     return False
 
-# /start and registration
+# Handlers
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if uid in USERS:
@@ -166,14 +171,13 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=menu_keyboard(uid)
         )
         return ConversationHandler.END
-    # New user
     await update.message.reply_text(
         "👋 Добро пожаловать! Выберите роль:",
         reply_markup=ReplyKeyboardMarkup([['Водитель','Руководитель']],resize_keyboard=True)
     )
     return ROLE_SELECT
 
-async def role_select(update: Update, ctx):
+async def role_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     role = update.message.text.strip()
     if role not in ('Водитель','Руководитель'):
         await update.message.reply_text("Выберите роль из списка.")
@@ -185,17 +189,12 @@ async def role_select(update: Update, ctx):
     )
     return REG_COMPANY
 
-async def reg_company(update: Update, ctx):
+async def reg_company(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data['company'] = update.message.text.strip()
-    if ctx.user_data['role'] == 'Руководитель':
-        # auto-approve for demo
-        uid = str(update.effective_user.id)
-        USERS[uid] = {
-            'role': 'Руководитель',
-            'company': ctx.user_data['company'],
-            'car': '',
-            'name': ''
-        }
+    uid = str(update.effective_user.id)
+    role = ctx.user_data['role']
+    if role == 'Руководитель':
+        USERS[uid] = {'role': 'Руководитель', 'company': ctx.user_data['company'], 'car': '', 'name': ''}
         USR_WS.append_row([uid,'Руководитель',ctx.user_data['company'],'',''])
         await update.message.reply_text(
             "✅ Вы зарегистрированы как Руководитель.",
@@ -205,25 +204,19 @@ async def reg_company(update: Update, ctx):
     await update.message.reply_text("Введите ФИО:")
     return REG_NAME
 
-async def reg_name(update: Update, ctx):
+async def reg_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data['name'] = update.message.text.strip()
     await update.message.reply_text("Введите номер авто:")
     return REG_CAR
 
-async def reg_car(update: Update, ctx):
+async def reg_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     USERS[uid] = {
-        'role': 'Водитель',
-        'company': ctx.user_data['company'],
-        'car': update.message.text.strip(),
-        'name': ctx.user_data['name']
+        'role': 'Водитель', 'company': ctx.user_data['company'],
+        'car': update.message.text.strip(), 'name': ctx.user_data['name']
     }
     USR_WS.append_row([
-        uid,
-        'Водитель',
-        ctx.user_data['company'],
-        update.message.text.strip(),
-        ctx.user_data['name']
+        uid,'Водитель',ctx.user_data['company'],update.message.text.strip(),ctx.user_data['name']
     ])
     await update.message.reply_text(
         "✅ Регистрация завершена.",
@@ -231,42 +224,40 @@ async def reg_car(update: Update, ctx):
     )
     return ConversationHandler.END
 
-# /startshift
-async def startshift_cmd(update: Update, ctx):
+async def startshift_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await ensure_reg(update): return
+    uid = str(update.effective_user.id)
     await update.message.reply_text(
         "Укажите пробег на начало смены (км):",
-        reply_markup=menu_keyboard(str(update.effective_user.id))
+        reply_markup=menu_keyboard(uid)
     )
     return START_ODO
 
-async def start_odo(update: Update, ctx):
+async def start_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     try:
         v = int(update.message.text.replace(',','.'))
     except:
         await update.message.reply_text("Нужно число. Попробуйте снова:")
         return START_ODO
-    ctx.user_data['odo0'] = v
     prev = last_odo(uid,'End')
     out = v - prev
-    append_log(uid, Тип='Start', Время=now_iso(), ОДО=v, Личный_км=out)
+    append_log(uid, Тип='Start', ОДО=v, Личный_км=out)
     await update.message.reply_text(
-        f"✅ Смена начата. Пробег вне смены: {out} км.",
+        f"✅ Смена начата. Пробег вне смены: {out} km.",
         reply_markup=menu_keyboard(uid)
     )
     return ConversationHandler.END
 
-# /fuel
-async def fuel_cmd(update: Update, ctx):
+async def fuel_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await ensure_reg(update): return
+    uid = str(update.effective_user.id)
     await update.message.reply_text(
-        "Пришлите фото чека:",
-        reply_markup=menu_keyboard(str(update.effective_user.id))
+        "Пришлите фото чека:",reply_markup=menu_keyboard(uid)
     )
     return FUEL_PHOTO
 
-async def fuel_photo(update: Update, ctx):
+async def fuel_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Отправьте фото чека:")
         return FUEL_PHOTO
@@ -274,7 +265,7 @@ async def fuel_photo(update: Update, ctx):
     await update.message.reply_text("Введите сумму (₽):")
     return FUEL_COST
 
-async def fuel_cost(update: Update, ctx):
+async def fuel_cost(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         c = float(update.message.text.replace(',','.'))
     except:
@@ -284,7 +275,7 @@ async def fuel_cost(update: Update, ctx):
     await update.message.reply_text("Введите литры:")
     return FUEL_LITERS
 
-async def fuel_liters(update: Update, ctx):
+async def fuel_liters(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     try:
         l = float(update.message.text.replace(',','.'))
@@ -292,128 +283,63 @@ async def fuel_liters(update: Update, ctx):
         await update.message.reply_text("Нужно число. Введите литры:")
         return FUEL_LITERS
     append_log(
-        uid,
-        Тип='Fuel',
-        Время=now_iso(),
-        Фото=ctx.user_data.pop('f_photo'),
-        Сумма=ctx.user_data.pop('f_cost'),
-        Литры=l
+        uid, Тип='Fuel', Фото=ctx.user_data.pop('f_photo'), Сумма=ctx.user_data.pop('f_cost'), Литры=l
     )
     await update.message.reply_text(
-        "✅ Заправка сохранена.",
-        reply_markup=menu_keyboard(uid)
+        "✅ Заправка сохранена.",reply_markup=menu_keyboard(uid)
     )
     return ConversationHandler.END
 
-# /endshift
-async def endshift_cmd(update: Update, ctx):
+async def endshift_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await ensure_reg(update): return
+    uid = str(update.effective_user.id)
     await update.message.reply_text(
-        "Укажите пробег на конец смены (км):",
-        reply_markup=menu_keyboard(str(update.effective_user.id))
+        "Укажите пробег на конец смены (km):",
+        reply_markup=menu_keyboard(uid)
     )
     return END_ODO
 
-async def end_odo(update: Update, ctx):
+async def end_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     try:
         v = int(update.message.text.replace(',','.'))
     except:
-        await update.message.reply_text("Нужно число. Повторите:")
+        await update.message.reply_text("Нужно число. Попробуйте снова:")
         return END_ODO
-    ctx.user_data['odo1'] = v
-    await update.message.reply_text("Пришлите фото одометра:")
-    return END_PHOTO
-
-async def end_photo(update: Update, ctx):
-    uid = str(update.effective_user.id)
-    if not update.message.photo:
-        await update.message.reply_text("Отправьте фото одометра:")
-        return END_PHOTO
-    odo_end = ctx.user_data.pop('odo1')
-    last_start = last_odo(uid,'Start')
-    delta = odo_end - last_start
-    append_log(
-        uid,
-        Тип='End',
-        Время=now_iso(),
-        ОДО=odo_end,
-        Фото=update.message.photo[-1].file_id,
-        Δ_км=delta
-    )
-    # summary hours worked approximated by log count? Simplify hours = delta/10
-    hours = round(delta/20,1)
+    prev = last_odo(uid,'Start')
+    delta = v - prev
+    append_log(uid, Тип='End', ОДО=v, Δ_км=delta)
     await update.message.reply_text(
-        f"✅ Смена завершена. Вы проехали {delta} км и работали {hours} часов. Приятного отдыха!",
+        f"✅ Смена завершена. Вы проехали {delta} km. Хорошего отдыха!",
         reply_markup=menu_keyboard(uid)
     )
     return ConversationHandler.END
 
-# /help
-async def help_cmd(update: Update, ctx):
+async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
-    await update.message.reply_text(
-        "Доступные команды:",
-        reply_markup=menu_keyboard(uid)
-    )
+    await update.message.reply_text("⚙️ Доступные команды:", reply_markup=menu_keyboard(uid))
 
-# unknown
-async def unknown(update: Update, ctx):
-    uid = str(update.effective_user.id)
-    await update.message.reply_text(
-        "Извините, не понял. Выберите команду из меню.",
-        reply_markup=menu_keyboard(uid)
-    )
+# Main
 
-# Main launch
-def main():
+def main() -> None:
     if not TOKEN:
         raise RuntimeError("TOKEN env var not set")
     app = ApplicationBuilder().token(TOKEN).build()
-    # Registration conversation
-    reg = ConversationHandler(
-        entry_points=[CommandHandler('start', cmd_start)],
-        states={
-            ROLE_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, role_select)],
-            REG_COMPANY: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_company)],
-            REG_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_name)],
-            REG_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_car)],
-        },
-        fallbacks=[CommandHandler('start', cmd_start)]
+    # Registration
+    app.add_handler(
+        ConversationHandler(
+            entry_points=[CommandHandler('start',cmd_start)],
+            states={
+                ROLE_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, role_select)],
+                REG_COMPANY: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_company)],
+                REG_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_name)],
+                REG_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_car)],
+            },
+            fallbacks=[CommandHandler('start',cmd_start)]
+        )
     )
-    app.add_handler(reg)
-    app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler('startshift', startshift_cmd)],
-        states={
-            START_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_odo)],
-        },
-        fallbacks=[CommandHandler('startshift', startshift_cmd)]
-    ))
-    app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler('fuel', fuel_cmd)],
-        states={
-            FUEL_PHOTO: [MessageHandler(filters.PHOTO, fuel_photo)],
-            FUEL_COST: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_cost)],
-            FUEL_LITERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_liters)],
-        },
-        fallbacks=[CommandHandler('fuel', fuel_cmd)]
-    ))
-    app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler('endshift', endshift_cmd)],
-        states={
-            END_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, end_odo)],
-            END_PHOTO: [MessageHandler(filters.PHOTO, end_photo)],
-        },
-        fallbacks=[CommandHandler('endshift', endshift_cmd)]
-    ))
-    app.add_handler(CommandHandler('help', help_cmd))
-    app.add_handler(MessageHandler(filters.COMMAND, unknown))
-    print("Bot started", flush=True)
-    asyncio.run(app.initialize())
-    app.run_polling()
+    # Start shift
 
-if __name__ == '__main__':
-    main()
 
 
 
