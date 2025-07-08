@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Топкон‑бот — однокомпонентная версия
-===============================
+===================================
 Один файл (`topkon_bot.py`) содержит всю логику бота, auto‑install зависимостей и мини‑Flask-заглушку для Render Free.
 
 Переменные окружения:
@@ -33,9 +33,8 @@ try:
     import telegram
 except ModuleNotFoundError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", *REQUIRE])
-# безопасно импортируем
 from flask import Flask
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -123,7 +122,7 @@ async def _need_reg(update: Update) -> bool:
         return True
     return False
 
-# получение последней записи по типу
+# получить последнее время и одометр по типу
 
 def _get_last_record(uid: str, type_: str) -> tuple[datetime.datetime,int]:
     for rec in reversed(LOG_WS.get_all_records()):
@@ -134,16 +133,16 @@ def _get_last_record(uid: str, type_: str) -> tuple[datetime.datetime,int]:
                 return t, odo
             except:
                 continue
-    # если нет, возвращаем текущее
+    # если нет, вернуть сейчас и 0
     return _now(), 0
 
-# ========== регистрация ==========
+# ========= регистрация =========
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if uid in DRIVERS:
         await update.message.reply_text(
-            "⚙️ Уже зарегистрированы. Доступные: /startshift /fuel /endshift /changecar /help"
+            f"⚙️ Уже зарегистрированы. Доступные: /startshift /fuel /endshift /changecar /help"
         )
         return ConversationHandler.END
     await update.message.reply_text("👤 Введите ФИО:")
@@ -174,7 +173,7 @@ reg_conv = ConversationHandler(
     fallbacks=[]
 )
 
-# ========== смена авто ==========
+# ========= смена авто =========
 
 async def cmd_changecar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
@@ -198,13 +197,12 @@ change_conv = ConversationHandler(
     fallbacks=[]
 )
 
-# ========== начало смены ==========
+# ========= начало смены =========
 
 async def cmd_startshift(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
     uid = str(update.effective_user.id)
-    name = DRIVERS[uid]['name']
-    await update.message.reply_text(f"{name}, укажите пробег на начало смены (км):")
+    await update.message.reply_text(f"{DRIVERS[uid]['name']}, укажите пробег на начало смены (км):")
     return START_ODO
 
 async def start_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -220,13 +218,16 @@ async def start_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Нужно фото, пришлите снова:")
         return START_PHOTO
+    bot: Bot = update.get_bot()
+    file = await bot.get_file(update.message.photo[-1].file_id)
+    file_url = file.file_path
     uid = str(update.effective_user.id)
     odo = ctx.user_data.pop('odo_start')
     _, prev_odo = _get_last_record(uid, 'End')
     personal = odo - prev_odo
-    _append(uid, 'Start', ОДО=odo, Фото=update.message.photo[-1].file_id, Личный_км=personal)
+    _append(uid, 'Start', ОДО=odo, Фото=file_url, Личный_км=personal)
     await update.message.reply_text(
-        "✅ Смена начата. Доступно: /fuel — заправка | /endshift — завершить"
+        "✅ Смена начата. Доступные: /fuel — заправка, /endshift — завершить смену"
     )
     return ConversationHandler.END
 
@@ -239,20 +240,21 @@ start_conv = ConversationHandler(
     fallbacks=[]
 )
 
-# ========== заправка ==========
+# ========= заправка =========
 
 async def cmd_fuel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
     uid = str(update.effective_user.id)
-    name = DRIVERS[uid]['name']
-    await update.message.reply_text(f"{name}, пришлите фото чека:")
+    await update.message.reply_text(f"{DRIVERS[uid]['name']}, пришлите фото чека:")
     return FUEL_PHOTO
 
 async def fuel_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Нужно фото чека, пришлите:")
         return FUEL_PHOTO
-    ctx.user_data['fuel_photo'] = update.message.photo[-1].file_id
+    bot: Bot = update.get_bot()
+    file = await bot.get_file(update.message.photo[-1].file_id)
+    ctx.user_data['fuel_photo_url'] = file.file_path
     await update.message.reply_text("Введите сумму (₽):")
     return FUEL_COST
 
@@ -272,71 +274,81 @@ async def fuel_liters(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Нужно число, повторите литры:")
         return FUEL_LITERS
     uid = str(update.effective_user.id)
-    _append(uid, 'Fuel', Фото=ctx.user_data.pop('fuel_photo'), Сумма=ctx.user_data.pop('fuel_cost'), Литры=liters)
-    await update.message.reply_text("✅ Заправка сохранена. Доступно: /fuel /endshift /help")
+    url = ctx.user_data.pop('fuel_photo_url')
+    cost = ctx.user_data.pop('fuel_cost')
+    _append(uid, 'Fuel', Фото=url, Сумма=cost, Литры=liters)
+    await update.message.reply_text("✅ Заправка сохранена. /fuel — ещё или /endshift — завершить смену")
     return ConversationHandler.END
 
 fuel_conv = ConversationHandler(
     entry_points=[CommandHandler('fuel', cmd_fuel)],
     states={
         FUEL_PHOTO: [MessageHandler(filters.PHOTO, fuel_photo)],
-        FUEL_COST: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_cost)],
-        FUEL_LITERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_liters)],
-    },
-    fallbacks=[]
+        FUEL_COST:  [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_cost)],
+        FUEL_LITERS:[MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_liters)],
+    }, fallbacks=[]
 )
 
-# ========== конец смены ==========
+# ========= конец смены =========
 
 async def cmd_endshift(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
     uid = str(update.effective_user.id)
-    name = DRIVERS[uid]['name']
-    await update.message.reply_text(f"{name}, укажите пробег на конец смены (км):")
+    await update.message.reply_text(f"{DRIVERS[uid]['name']}, укажите пробег на конец смены (км):")
     return END_ODO
 
 async def end_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         ctx.user_data['odo_end'] = int(update.message.text)
     except:
-        await update.message.reply_text("Нужно число, попробуйте ещё:")
+        await update.message.reply_text("Нужно число, повторите:")
         return END_ODO
     await update.message.reply_text("Пришлите фото одометра:")
     return END_PHOTO
 
 async def end_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text("Нужно фото, пришлите:")
+        await update.message.reply_text("Нужно фото, пришлите снова:")
         return END_PHOTO
+    bot: Bot = update.get_bot()
+    file = await bot.get_file(update.message.photo[-1].file_id)
+    file_url = file.file_path
     uid = str(update.effective_user.id)
     odo_end = ctx.user_data.pop('odo_end')
-    start_time, start_odo = _get_last_record(uid, 'Start')
-    delta_km = odo_end - start_odo
-    work_hours = round((datetime.datetime.now(TZ) - start_time).total_seconds() / 3600, 2)
-    _append(uid, 'End', ОДО=odo_end, Фото=update.message.photo[-1].file_id, Δ_км=delta_km)
+    _, odo_start = _get_last_record(uid, 'Start')
+    delta = odo_end - odo_start
+    _append(uid, 'End', ОДО=odo_end, Фото=file_url, Δ_км=delta)
+    # расчёт часов работы
+    start_time, _ = _get_last_record(uid, 'Start')
+    end_time = _now()
+    hrs = (end_time - start_time).total_seconds() / 3600
     name = DRIVERS[uid]['name']
     await update.message.reply_text(
-        f"✅ Смена завершена. {name}, вы проехали {delta_km} км и работали {work_hours} ч. Приятного отдыха! Доступно: /startshift /help"
+        f"✅ Смена завершена. {name}, вы проехали {delta} км и работали {hrs:.1f} ч. \nПриятного отдыха!\n/startshift — новая смена"
     )
     return ConversationHandler.END
 
 end_conv = ConversationHandler(
     entry_points=[CommandHandler('endshift', cmd_endshift)],
     states={
-        END_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, end_odo)],
-        END_PHOTO: [MessageHandler(filters.PHOTO, end_photo)],
-    },
-    fallbacks=[]
+        END_ODO:  [MessageHandler(filters.TEXT & ~filters.COMMAND, end_odo)],
+        END_PHOTO:[MessageHandler(filters.PHOTO, end_photo)],
+    }, fallbacks=[]
 )
 
-# ========== помощь ==========
+# ========== помощь =========
 
 async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚙️ Доступные команды: /start /startshift /fuel /endshift /changecar /help"
+        "/start — регистрация\n"
+        "/startshift — начало смены\n"
+        "/fuel — заправка\n"
+        "/endshift — конец смены\n"
+        "/changecar — сменить авто\n"
+        "/help — помощь"
     )
 
-# ========== основной запуск ==========
+# ========= main =========
 
 def main():
     if not TOKEN:
@@ -348,7 +360,7 @@ def main():
     app.add_handler(fuel_conv)
     app.add_handler(end_conv)
     app.add_handler(CommandHandler('help', help_cmd))
-    print("🔄 Bot polling started", flush=True)
+    print("🔄 Bot started", flush=True)
     app.run_polling()
 
 if __name__ == "__main__":
