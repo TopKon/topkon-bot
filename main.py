@@ -95,7 +95,6 @@ LOG_WS, DRV_WS = _init_sheets()
 DRIVERS = {r[0]: {"name": r[1], "car": r[2]} for r in DRV_WS.get_all_values()[1:]}
 
 # вспомогательные
-
 def _now(): return datetime.datetime.now(TZ)
 
 def _append(uid: str, type_: str, **fields):
@@ -140,7 +139,7 @@ async def reg_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     car=update.message.text.strip()
     DRV_WS.append_row([uid,name,car])
     DRIVERS[uid]={'name':name,'car':car}
-    await update.message.reply_text(f"✅ {name}, регистрация завершена!")
+    await update.message.reply_text(f"✅ {name}, регистрация завершена! Доступно: /startshift /fuel /endshift /changecar /help")
     return ConversationHandler.END
 
 reg_conv=ConversationHandler(
@@ -162,7 +161,6 @@ async def cmd_changecar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def change_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid=str(update.effective_user.id)
     new=update.message.text.strip()
-    # обновляем в листе
     col=DRV_WS.col_values(1)
     row=col.index(uid)+1
     DRV_WS.update_cell(row,3,new)
@@ -179,7 +177,8 @@ change_conv=ConversationHandler(
 # ========== начало смены ==========
 async def cmd_startshift(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
-    uid, name=str(update.effective_user.id),DRIVERS[str(update.effective_user.id)]['name']
+    uid=str(update.effective_user.id)
+    name=DRIVERS[uid]['name']
     await update.message.reply_text(f"{name}, укажите пробег на начало смены:")
     return START_ODO
 
@@ -201,7 +200,9 @@ async def start_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     prev=_get_last('End',uid) or odo
     personal=odo-prev
     _append(uid,'Start',ОДО=odo,Фото=update.message.photo[-1].file_id,Личный_км=personal)
-    await update.message.reply_text(f"✅ Смена начата.")
+    await update.message.reply_text(
+        "✅ Смена начата. Доступно: /fuel – заправка | /endshift – завершить"
+    )
     return ConversationHandler.END
 
 start_conv=ConversationHandler(
@@ -225,7 +226,8 @@ def _get_last(type_,uid):
 # ========== заправка ==========
 async def cmd_fuel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
-    await update.message.reply_text(f"{DRIVERS[str(update.effective_user.id)]['name']}, пришлите фото чека:")
+    uid=str(update.effective_user.id)
+    await update.message.reply_text(f"{DRIVERS[uid]['name']}, пришлите фото чека:")
     return FUEL_PHOTO
 
 async def fuel_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -267,7 +269,9 @@ fuel_conv=ConversationHandler(
 # ========== конец смены ==========
 async def cmd_endshift(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _need_reg(update): return ConversationHandler.END
-    await update.message.reply_text(f"{DRIVERS[str(update.effective_user.id)]['name']}, укажите пробег на конец смены:")
+    uid=str(update.effective_user.id)
+    name=DRIVERS[uid]['name']
+    await update.message.reply_text(f"{name}, укажите пробег на конец смены:")
     return END_ODO
 
 async def end_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -286,52 +290,8 @@ async def end_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     odo_end=ctx.user_data.pop('odo_end')
     start_time, start_odo = _get_last_record(uid,'Start')
     delta=odo_end-start_odo
-    _append(uid,'End',ОДО=odo_end,Фото=update.message.photo[-1].file_id,Δ_км=delta)
-    # вычисляем время смены
-    hours=((_now()-start_time).total_seconds()/3600)
-    name=DRIVERS[uid]['name']
-    await update.message.reply_text(
-        f"✅ Смена завершена. {name}, вы проехали {delta} км и работали {hours:.1f} ч. Приятного отдыха!"
-    )
-    return ConversationHandler.END
+    _append(uid,'End',ОДО=odo_end,Фото=update.message.photo[-
 
-end_conv=ConversationHandler(
-    entry_points=[CommandHandler('endshift',cmd_endshift)],
-    states={
-        END_ODO:[MessageHandler(filters.TEXT&~filters.COMMAND,end_odo)],
-        END_PHOTO:[MessageHandler(filters.PHOTO,end_photo)]
-    },
-    fallbacks=[]
-)
-
-# вспомогательный для времени/ODO
-
-def _get_last_record(uid,type_):
-    for rec in reversed(LOG_WS.get_all_records()):
-        if rec['UID']==uid and rec['Тип']==type_:
-            t=datetime.datetime.fromisoformat(rec['Время'])
-            return t,int(rec['ОДО'])
-    return _now(),0
-
-# ========== help ==========
-async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚙️ /start /startshift /fuel /endshift /changecar /help")
-
-# ========== main ==========
-def main():
-    if not TOKEN: raise RuntimeError("TOKEN env var not set")
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(reg_conv)
-    app.add_handler(change_conv)
-    app.add_handler(start_conv)
-    app.add_handler(fuel_conv)
-    app.add_handler(end_conv)
-    app.add_handler(CommandHandler('help', help_cmd))
-    print("🔄 Bot started", flush=True)
-    app.run_polling()
-
-if __name__ == '__main__':
-    main()
 
 
 
