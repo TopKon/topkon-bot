@@ -10,11 +10,7 @@
 - Flask-заглушка для Render
 """
 from __future__ import annotations
-import os
-import sys
-import subprocess
-import threading
-import datetime
+import os, sys, subprocess, threading, datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Optional
 
@@ -50,9 +46,9 @@ TOKEN = os.getenv("TOKEN", "")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "")
 GOOGLE_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
 TZ = ZoneInfo("Europe/Moscow")
-ADMIN_UID = '1881053841'  # default admin UID
+ADMIN_UID = '1881053841'  # ваш UID администратора
 
-# States
+# Conversation states
 (
     ROLE_SELECT,
     REG_COMPANY,
@@ -63,7 +59,8 @@ ADMIN_UID = '1881053841'  # default admin UID
     FUEL_COST,
     FUEL_LITERS,
     END_ODO,
-) = range(9)
+    END_PHOTO,
+) = range(10)
 
 # Header for log sheet
 HEADER = [
@@ -84,6 +81,7 @@ th = threading.Thread(target=_fake_web, daemon=True)
 th.start()
 
 # Initialize Google Sheets
+
 def init_sheets():
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDENTIALS, scope)
@@ -113,6 +111,7 @@ for row in USR_WS.get_all_values()[1:]:
     USERS[uid] = {"role": role, "company": company, "car": car, "name": name}
 
 # Helpers
+
 def now_iso() -> str:
     return datetime.datetime.now(TZ).isoformat(timespec='seconds')
 
@@ -132,14 +131,16 @@ def append_log(uid: str, **fields) -> None:
             row[IDX[k]] = str(v)
     LOG_WS.append_row(row)
 
+
 def last_odo(uid: str, only_type: Optional[str] = None) -> int:
     for rec in reversed(LOG_WS.get_all_records()):
         if str(rec.get('UID')) == uid and (only_type is None or rec.get('Тип') == only_type):
             try:
-                return int(rec.get('ОДО', 0))
+                return int(rec.get('ОДО',0))
             except:
                 return 0
     return 0
+
 
 def menu_keyboard(uid: str) -> ReplyKeyboardMarkup:
     base = ['/startshift', '/fuel', '/endshift', '/help']
@@ -155,6 +156,7 @@ async def ensure_reg(update: Update) -> bool:
     return False
 
 # Handlers
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if uid in USERS:
@@ -221,8 +223,9 @@ async def reg_car(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def startshift_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await ensure_reg(update): return ConversationHandler.END
     uid = str(update.effective_user.id)
+    prev_end = last_odo(uid,'End')
     await update.message.reply_text(
-        "Укажите пробег на начало смены (км):",
+        f"Укажите пробег на начало смены (км), последний завершён:{prev_end}:",
         reply_markup=menu_keyboard(uid)
     )
     return START_ODO
@@ -238,17 +241,14 @@ async def start_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     out = v - prev
     append_log(uid, Тип='Start', ОДО=v, Личный_км=out)
     await update.message.reply_text(
-        f"✅ Смена начата. Пробег вне смены: {out} km.",
+        f"✅ Смена начата. Пробег вне смены: {out} км.",
         reply_markup=menu_keyboard(uid)
     )
     return ConversationHandler.END
 
 async def fuel_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await ensure_reg(update): return ConversationHandler.END
-    uid = str(update.effective_user.id)
-    await update.message.reply_text(
-        "Пришлите фото чека:", reply_markup=menu_keyboard(uid)
-    )
+    await update.message.reply_text("Пришлите фото чека:", reply_markup=menu_keyboard(str(update.effective_user.id)))
     return FUEL_PHOTO
 
 async def fuel_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -276,7 +276,103 @@ async def fuel_liters(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Нужно число. Введите литры:")
         return FUEL_LITERS
-    append_log(
+    append_log(uid, Тип='Fuel', Фото=ctx.user_data.pop('фото'), Сумма=ctx.user_data.pop('сумма'), Литры=l)
+    await update.message.reply_text("✅ Заправка сохранена.", reply_markup=menu_keyboard(uid))
+    return ConversationHandler.END
+
+async def endshift_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_reg(update): return ConversationHandler.END
+    uid = str(update.effective_user.id)
+    await update.message.reply_text("Укажите пробег на конец смены (км):", reply_markup=menu_keyboard(uid))
+    return END_ODO
+
+async def end_odo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        v = int(update.message.text.replace(',', '.'))
+    except:
+        await update.message.reply_text("Нужно число. Попробуйте снова:")
+        return END_ODO
+    ctx.user_data['odo_end'] = v
+    await update.message.reply_text("Пришлите фото одометра:")
+    return END_PHOTO
+
+async def end_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not update.message.photo:
+        await update.message.reply_text("Отправьте фото одометра:")
+        return END_PHOTO
+    uid = str(update.effective_user.id)
+    odo_end = ctx.user_data.pop('odo_end')
+    odo_start = last_odo(uid, 'Start')
+    delta = odo_end - odo_start
+    append_log(uid, Тип='End', ОДО=odo_end, Фото=update.message.photo[-1].file_id, Δ_км=delta)
+    await update.message.reply_text(
+        f"✅ Смена завершена. Вы проехали {delta} км. Хорошего отдыха!",
+        reply_markup=menu_keyboard(uid)
+    )
+    return ConversationHandler.END
+
+async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "⚙️ Доступные команды:\n/start \u2014 регистрация\n/startshift \u2014 начало смены\n/fuel \u2014 заправка\n/endshift \u2014 конец смены\n/help \u2014 помощь",
+        reply_markup=menu_keyboard(str(update.effective_user.id))
+    )
+
+async def unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Извините, я не понял. Пожалуйста, выберите команду из меню.",
+        reply_markup=menu_keyboard(str(update.effective_user.id))
+    )
+
+# Main
+
+def main():
+    if not TOKEN or not SPREADSHEET_ID or not GOOGLE_CREDENTIALS:
+        raise RuntimeError("TOKEN, SPREADSHEET_ID и GOOGLE_APPLICATION_CREDENTIALS должны быть заданы")
+    app = ApplicationBuilder().token(TOKEN).build()
+    # Registration conv
+    reg_conv = ConversationHandler(
+        entry_points=[CommandHandler('start', cmd_start)],
+        states={
+            ROLE_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, role_select)],
+            REG_COMPANY: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_company)],
+            REG_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_name)],
+            REG_CAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_car)],
+        },
+        fallbacks=[CommandHandler('start', cmd_start)],
+    )
+    app.add_handler(reg_conv)
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('startshift', startshift_cmd)],
+        states={START_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, start_odo)]},
+        fallbacks=[CommandHandler('start', cmd_start)],
+    ))
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('fuel', fuel_cmd)],
+        states={
+            FUEL_PHOTO: [MessageHandler(filters.PHOTO, fuel_photo)],
+            FUEL_COST: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_cost)],
+            FUEL_LITERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, fuel_liters)],
+        },
+        fallbacks=[CommandHandler('start', cmd_start)],
+    ))
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('endshift', endshift_cmd)],
+        states={
+            END_ODO: [MessageHandler(filters.TEXT & ~filters.COMMAND, end_odo)],
+            END_PHOTO: [MessageHandler(filters.PHOTO, end_photo)],
+        },
+        fallbacks=[CommandHandler('start', cmd_start)],
+    ))
+    app.add_handler(CommandHandler('help', help_cmd))
+    app.add_handler(MessageHandler(filters.COMMAND, unknown))
+    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, unknown))
+
+    print("🔄 Bot polling started", flush=True)
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
+
 
 
 
